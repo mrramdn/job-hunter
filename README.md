@@ -100,6 +100,9 @@ build tag:
 go test -tags e2e ./finder
 ```
 
+Test cases and expected results are listed in
+[docs/e2e-test-cases.md](docs/e2e-test-cases.md).
+
 ## Discord bot
 
 `jobbot` stores named searches, runs them on a schedule, filters results with

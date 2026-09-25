@@ -11,6 +11,7 @@ import (
 	"github.com/akmalfairuz/job-hunter/finder"
 )
 
+// TestSearch covers E2E-01 in docs/e2e-test-cases.md.
 func TestSearch(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -40,6 +41,7 @@ func TestSearch(t *testing.T) {
 	}
 }
 
+// TestSearch_FetchesDescription covers E2E-02 in docs/e2e-test-cases.md.
 func TestSearch_FetchesDescription(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
