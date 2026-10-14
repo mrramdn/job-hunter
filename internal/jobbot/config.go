@@ -17,11 +17,12 @@ import (
 
 // Config is the centralized runtime configuration for jobbot.
 type Config struct {
-	Discord   DiscordConfig   `envPrefix:"DISCORD_"`
-	Database  DatabaseConfig  `envPrefix:"MYSQL_"`
-	LLM       LLMConfig       `envPrefix:"LLM_"`
-	Scheduler SchedulerConfig `envPrefix:"SCHEDULER_"`
-	LinkedIn  LinkedInConfig  `envPrefix:"LINKEDIN_"`
+	Discord      DiscordConfig      `envPrefix:"DISCORD_"`
+	Database     DatabaseConfig     `envPrefix:"MYSQL_"`
+	LLM          LLMConfig          `envPrefix:"LLM_"`
+	Scheduler    SchedulerConfig    `envPrefix:"SCHEDULER_"`
+	LinkedIn     LinkedInConfig     `envPrefix:"LINKEDIN_"`
+	Availability AvailabilityConfig `envPrefix:"AVAILABILITY_"`
 }
 
 type DiscordConfig struct {
@@ -74,6 +75,19 @@ type SchedulerConfig struct {
 type LinkedInConfig struct {
 	UserAgent string `env:"USER_AGENT"`
 }
+
+// AvailabilityConfig controls how sent jobs are re-checked on LinkedIn.
+type AvailabilityConfig struct {
+	// CheckInterval is how often each sent job is re-checked. Zero disables
+	// availability checks.
+	CheckInterval time.Duration `env:"CHECK_INTERVAL" envDefault:"24h"`
+	// MaxAge stops checks for jobs sent longer ago than this.
+	MaxAge time.Duration `env:"MAX_AGE" envDefault:"720h"`
+	// BatchSize limits the messages checked in one scheduler run.
+	BatchSize int `env:"BATCH_SIZE" envDefault:"10"`
+}
+
+func (config AvailabilityConfig) Enabled() bool { return config.CheckInterval > 0 }
 
 // LoadConfig loads .env when it exists and then parses the process environment.
 // Existing process variables take precedence over values in .env.
@@ -132,6 +146,12 @@ func (config Config) Validate() error {
 		return errors.New("SCHEDULER_HOURS_OLD must not be negative")
 	case config.Scheduler.RunTimeout <= 0:
 		return errors.New("SCHEDULER_RUN_TIMEOUT must be greater than zero")
+	case config.Availability.CheckInterval < 0:
+		return errors.New("AVAILABILITY_CHECK_INTERVAL must not be negative")
+	case config.Availability.Enabled() && config.Availability.MaxAge <= 0:
+		return errors.New("AVAILABILITY_MAX_AGE must be greater than zero")
+	case config.Availability.Enabled() && config.Availability.BatchSize <= 0:
+		return errors.New("AVAILABILITY_BATCH_SIZE must be greater than zero")
 	}
 	if _, err := openAIBaseURL(config.LLM.BaseURL); err != nil {
 		return fmt.Errorf("LLM_BASE_URL: %w", err)

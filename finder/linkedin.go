@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -263,6 +264,41 @@ func (c *Client) enrichJob(ctx context.Context, job *Job, format DescriptionForm
 	job.JobFunction = details.jobFunction
 	job.Emails = extractEmails(details.description)
 	return nil
+}
+
+// JobStatus reports whether a LinkedIn job still accepts applications. jobID
+// may include the "li-" prefix used by Job.ID. Rate limits, sign-in walls, and
+// other unexpected responses return an error rather than a status.
+func (c *Client) JobStatus(ctx context.Context, jobID string) (JobStatus, error) {
+	id := strings.TrimPrefix(strings.TrimSpace(jobID), "li-")
+	if id == "" {
+		return "", errors.New("job ID is required")
+	}
+	detailURL := strings.TrimRight(c.baseURL, "/") + "/jobs/view/" + url.PathEscape(id)
+	resp, err := c.get(ctx, detailURL, "job status request", c.detailTimeout)
+	if err != nil {
+		var searchError *SearchError
+		if errors.As(err, &searchError) && (searchError.StatusCode == http.StatusNotFound || searchError.StatusCode == http.StatusGone) {
+			return JobStatusRemoved, nil
+		}
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.Request != nil && resp.Request.URL != nil {
+		if path := resp.Request.URL.Path; !strings.HasPrefix(path, "/jobs/view/") {
+			// LinkedIn redirects removed jobs to its job search page.
+			if path == "/jobs" || strings.HasPrefix(path, "/jobs/") {
+				return JobStatusRemoved, nil
+			}
+			return "", &SearchError{Operation: "job status request", URL: detailURL, Err: fmt.Errorf("redirected to %s", path)}
+		}
+	}
+	status, err := parseJobStatus(resp.Body)
+	if err != nil {
+		return "", &SearchError{Operation: "job status parsing", URL: detailURL, Err: err}
+	}
+	return status, nil
 }
 
 func jobTypeCode(jobType JobType) string {

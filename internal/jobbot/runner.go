@@ -12,8 +12,15 @@ import (
 	"github.com/akmalfairuz/job-hunter/finder"
 )
 
+// ErrMessageNotFound reports that a job notification's Discord message no
+// longer exists.
+var ErrMessageNotFound = errors.New("Discord message not found")
+
+// Notifier sends job notifications and re-renders sent ones. SendJob returns
+// the ID of the sent message.
 type Notifier interface {
-	SendJob(context.Context, Notification) error
+	SendJob(context.Context, Notification) (string, error)
+	EditJob(context.Context, string, Notification) error
 }
 
 // DeliveryError distinguishes a Discord rejection that is known not to have
@@ -30,9 +37,11 @@ func (failure *DeliveryError) Unwrap() error { return failure.Err }
 type Runner struct {
 	repository    Repository
 	searcher      finder.Searcher
+	checker       finder.StatusChecker
 	evaluator     Evaluator
 	notifier      Notifier
 	config        SchedulerConfig
+	availability  AvailabilityConfig
 	allowedGuilds map[string]struct{}
 	logger        *slog.Logger
 }
@@ -42,12 +51,18 @@ type ManualRunOptions struct {
 	HoursOld *int
 }
 
-func NewRunner(repository Repository, searcher finder.Searcher, evaluator Evaluator, notifier Notifier, config SchedulerConfig, allowedGuildIDs []string, logger *slog.Logger) *Runner {
-	return &Runner{repository: repository, searcher: searcher, evaluator: evaluator, notifier: notifier, config: config, allowedGuilds: guildSet(allowedGuildIDs), logger: logger}
+func NewRunner(repository Repository, searcher finder.Searcher, checker finder.StatusChecker, evaluator Evaluator, notifier Notifier, config SchedulerConfig, availability AvailabilityConfig, allowedGuildIDs []string, logger *slog.Logger) *Runner {
+	return &Runner{
+		repository: repository, searcher: searcher, checker: checker, evaluator: evaluator, notifier: notifier,
+		config: config, availability: availability, allowedGuilds: guildSet(allowedGuildIDs), logger: logger,
+	}
 }
 
 func (runner *Runner) RunScheduled(ctx context.Context) error {
 	locked, err := runner.repository.WithSchedulerLock(ctx, func(lockContext context.Context) error {
+		if err := runner.checkAvailability(lockContext); err != nil && !errors.Is(err, context.Canceled) {
+			runner.logger.Error("job availability check finished with errors", "error", err)
+		}
 		return runner.run(lockContext, nil, runner.config.HoursOld)
 	})
 	if err != nil {
@@ -161,6 +176,9 @@ func (runner *Runner) run(ctx context.Context, subscriptions []Subscription, hou
 			CompanyLogoURL: candidate.job.CompanyLogoURL, Location: normalizedLocation(candidate.job.Location),
 			AIOverview: candidate.overview, DatePosted: candidate.job.DatePosted,
 		}
+		if runner.availability.Enabled() {
+			notification.Availability, notification.CheckedAt = finder.JobStatusOpen, time.Now()
+		}
 		id, claimed, err := runner.repository.ClaimNotification(ctx, notification)
 		if err != nil {
 			runErrors = append(runErrors, err)
@@ -179,7 +197,7 @@ func (runner *Runner) run(ctx context.Context, subscriptions []Subscription, hou
 			}
 			continue
 		}
-		err = runner.notifier.SendJob(ctx, notification)
+		messageID, err := runner.notifier.SendJob(ctx, notification)
 		if err != nil {
 			runErrors = append(runErrors, fmt.Errorf("notify job %s: %w", notification.LinkedInJobID, err))
 			var deliveryError *DeliveryError
@@ -190,7 +208,7 @@ func (runner *Runner) run(ctx context.Context, subscriptions []Subscription, hou
 			}
 			continue
 		}
-		if err := runner.repository.CompleteNotification(ctx, id); err != nil {
+		if err := runner.repository.CompleteNotification(ctx, id, messageID, notification); err != nil {
 			runErrors = append(runErrors, err)
 		}
 	}
