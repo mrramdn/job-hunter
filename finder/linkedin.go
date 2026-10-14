@@ -286,12 +286,13 @@ func (c *Client) JobStatus(ctx context.Context, jobID string) (JobStatus, error)
 	defer resp.Body.Close()
 
 	if resp.Request != nil && resp.Request.URL != nil {
-		if path := resp.Request.URL.Path; !strings.HasPrefix(path, "/jobs/view/") {
-			// LinkedIn redirects removed jobs to its job search page.
-			if path == "/jobs" || strings.HasPrefix(path, "/jobs/") {
+		if final := resp.Request.URL; !strings.HasPrefix(final.Path, "/jobs/view/") {
+			// LinkedIn redirects removed jobs to its job search page. A search
+			// page that still names the job is a different view of a live job.
+			if (final.Path == "/jobs" || strings.HasPrefix(final.Path, "/jobs/")) && !strings.Contains(final.RawQuery, id) {
 				return JobStatusRemoved, nil
 			}
-			return "", &SearchError{Operation: "job status request", URL: detailURL, Err: fmt.Errorf("redirected to %s", path)}
+			return "", &SearchError{Operation: "job status request", URL: detailURL, Err: fmt.Errorf("redirected to %s", final.Path)}
 		}
 	}
 	status, err := parseJobStatus(resp.Body)

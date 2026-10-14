@@ -10,6 +10,7 @@ import (
 
 const (
 	openJobPage = `<section class="top-card-layout"><h2 class="top-card-layout__title">Engineer</h2>
+		<figure class="num-applicants__figure"><figcaption>Over 200 applicants</figcaption></figure>
 		<button class="sign-up-modal__outlet">Apply</button></section>
 		<div class="show-more-less-html__markup">We are no longer accepting applications after June.</div>`
 	closedJobPage = `<section class="top-card-layout"><h2 class="top-card-layout__title">Engineer</h2></section>
@@ -17,6 +18,8 @@ const (
 		No longer accepting applications</figcaption></figure></div>`
 	closedTextJobPage = `<section class="top-card-layout"><h2 class="top-card-layout__title">Engineer</h2>
 		<span>No longer accepting applications</span></section>`
+	closedCaptionJobPage = `<section class="job-header"><h2>Engineer</h2>
+		<figure class="job-state"><figcaption>No longer accepting applications</figcaption></figure></section>`
 )
 
 func TestParseJobStatus(t *testing.T) {
@@ -28,6 +31,7 @@ func TestParseJobStatus(t *testing.T) {
 		{"open with phrase in description", openJobPage, JobStatusOpen},
 		{"closed notice", closedJobPage, JobStatusClosed},
 		{"closed text in top card", closedTextJobPage, JobStatusClosed},
+		{"closed text in renamed markup", closedCaptionJobPage, JobStatusClosed},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -58,6 +62,9 @@ func TestClientJobStatus(t *testing.T) {
 		http.Redirect(w, r, "/authwall?trk=job", http.StatusFound)
 	})
 	mux.HandleFunc("/authwall", page("<html></html>"))
+	mux.HandleFunc("/jobs/view/6", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/jobs/search?currentJobId=6", http.StatusFound)
+	})
 	server := httptest.NewServer(mux)
 	defer server.Close()
 
@@ -73,6 +80,7 @@ func TestClientJobStatus(t *testing.T) {
 		{id: "li-3", want: JobStatusRemoved},
 		{id: "li-4", want: JobStatusRemoved},
 		{id: "li-5", wantErr: true},
+		{id: "li-6", wantErr: true},
 		{id: "li-", wantErr: true},
 	}
 	for _, test := range tests {

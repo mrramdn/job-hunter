@@ -140,12 +140,19 @@ docker compose up -d
 ```
 
 The MySQL schema is initialized from the files in `migrations/` when its
-Docker volume is first created. Apply later migrations to an existing volume
-manually, as described in Setup. Configure the connection with the individual
+Docker volume is first created. Configure the connection with the individual
 `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_DATABASE`, `MYSQL_USER`, and
 `MYSQL_PASSWORD` variables. The Compose-oriented `.env.example` uses the
 `mysql` service hostname; use `127.0.0.1` instead when running `jobbot`
 outside Docker.
+
+Apply later migrations to an existing volume before starting a newer image,
+for example:
+
+```sh
+docker compose exec -T mysql sh -c 'exec mysql -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE"' \
+  < migrations/002_job_availability.sql
+```
 
 Invite the Discord application with the `bot` and `applications.commands`
 scopes. Notification channels must allow View Channel, Send Messages, Embed
