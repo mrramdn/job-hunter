@@ -109,11 +109,15 @@ an OpenAI-compatible API, and sends matching jobs to Discord.
 
 ### Setup
 
-1. Create a MySQL database and apply the schema:
+1. Create a MySQL database and apply the migrations in order:
 
    ```sh
    mysql -u root -p jobbot < migrations/001_jobbot.sql
+   mysql -u root -p jobbot < migrations/002_job_availability.sql
    ```
+
+   When upgrading, apply only the migrations that are new to your database.
+   `jobbot` refuses to start until they are applied.
 
 2. Copy `.env.example` to `.env` and configure the Discord, MySQL, LLM,
    scheduler, and LinkedIn settings. Process environment variables take
@@ -135,8 +139,9 @@ your `.env`, start the latest image and its MySQL database with:
 docker compose up -d
 ```
 
-The MySQL schema is initialized from `migrations/001_jobbot.sql` when its
-Docker volume is first created. Configure the connection with the individual
+The MySQL schema is initialized from the files in `migrations/` when its
+Docker volume is first created. Apply later migrations to an existing volume
+manually, as described in Setup. Configure the connection with the individual
 `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_DATABASE`, `MYSQL_USER`, and
 `MYSQL_PASSWORD` variables. The Compose-oriented `.env.example` uses the
 `mysql` service hostname; use `127.0.0.1` instead when running `jobbot`
@@ -175,6 +180,14 @@ scheduler's configured job age.
 - The **Details** button opens the LinkedIn job URL directly.
 - LLM decisions are cached persistently in MySQL. Unchanged content reuses the
   cached result across duplicate searches and repost dates.
+- Each message shows a **Status** field. `jobbot` re-checks the LinkedIn job
+  every `AVAILABILITY_CHECK_INTERVAL` (24 hours by default) and edits the
+  message: `Open` with the last check time, or `Closed` or `Removed` in grey
+  once the job stops accepting applications.
+- Checks stop for jobs sent more than `AVAILABILITY_MAX_AGE` ago (30 days by
+  default). Each scheduler run checks at most `AVAILABILITY_BATCH_SIZE`
+  messages. Messages sent before `migrations/002_job_availability.sql` are not
+  tracked.
 
 ## Notes
 

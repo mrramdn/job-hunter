@@ -63,3 +63,29 @@ func TestSearch_FetchesDescription(t *testing.T) {
 		}
 	}
 }
+
+func TestJobStatus(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	client := finder.NewClient(finder.ClientConfig{})
+	jobs, err := client.Search(ctx, finder.SearchOptions{
+		Query:         "software engineer",
+		Locations:     []string{"United States"},
+		ResultsWanted: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) == 0 {
+		t.Fatal("no jobs found")
+	}
+
+	status, err := client.JobStatus(ctx, jobs[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != finder.JobStatusOpen {
+		t.Fatalf("job %s status = %q, want open", jobs[0].ID, status)
+	}
+}

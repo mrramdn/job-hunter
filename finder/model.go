@@ -128,7 +128,23 @@ type Job struct {
 	JobFunction     string        `json:"job_function,omitempty"`
 }
 
+// JobStatus reports whether a LinkedIn job still accepts applications.
+type JobStatus string
+
+const (
+	JobStatusOpen JobStatus = "open"
+	// JobStatusClosed is a job page marked "No longer accepting applications".
+	JobStatusClosed JobStatus = "closed"
+	// JobStatusRemoved is a job page that LinkedIn no longer serves.
+	JobStatusRemoved JobStatus = "removed"
+)
+
 // Searcher is implemented by LinkedIn job finders.
 type Searcher interface {
 	Search(context.Context, SearchOptions) ([]Job, error)
+}
+
+// StatusChecker is implemented by LinkedIn job status checkers.
+type StatusChecker interface {
+	JobStatus(context.Context, string) (JobStatus, error)
 }
