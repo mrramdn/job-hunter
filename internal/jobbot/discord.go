@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"strings"
 
+	"github.com/akmalfairuz/job-hunter/finder"
 	"github.com/bwmarrin/discordgo"
 )
 
@@ -285,17 +287,33 @@ func (service *DiscordService) respond(interaction *discordgo.InteractionCreate,
 	}
 }
 
-func (service *DiscordService) SendJob(_ context.Context, notification Notification) error {
-	_, err := service.session.ChannelMessageSendComplex(notification.ChannelID, buildJobMessage(notification))
+func (service *DiscordService) SendJob(_ context.Context, notification Notification) (string, error) {
+	message, err := service.session.ChannelMessageSendComplex(notification.ChannelID, buildJobMessage(notification))
 	if err != nil {
 		safeToRetry := false
 		var restError *discordgo.RESTError
 		if errors.As(err, &restError) && restError.Response != nil {
 			safeToRetry = restError.Response.StatusCode >= 400 && restError.Response.StatusCode < 500
 		}
-		return &DeliveryError{Err: err, SafeToRetry: safeToRetry}
+		return "", &DeliveryError{Err: err, SafeToRetry: safeToRetry}
 	}
-	return nil
+	return message.ID, nil
+}
+
+// EditJob replaces a sent job message with the current rendering of
+// notification. Bots can always edit their own messages, so this needs no
+// extra channel permission.
+func (service *DiscordService) EditJob(_ context.Context, messageID string, notification Notification) error {
+	message := buildJobMessage(notification)
+	_, err := service.session.ChannelMessageEditComplex(&discordgo.MessageEdit{
+		ID: messageID, Channel: notification.ChannelID,
+		Embeds: &message.Embeds, Components: &message.Components, AllowedMentions: message.AllowedMentions,
+	})
+	var restError *discordgo.RESTError
+	if errors.As(err, &restError) && restError.Response != nil && restError.Response.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("%w: %w", ErrMessageNotFound, err)
+	}
+	return err
 }
 
 func (service *DiscordService) validateNotificationChannel(channelID string) error {
@@ -326,10 +344,18 @@ func buildJobMessage(notification Notification) *discordgo.MessageSend {
 	if notification.Reposted {
 		postedLabel = "Reposted"
 	}
+	color := 0x0A66C2
+	fields := []*discordgo.MessageEmbedField{{Name: "Location", Value: truncateRunes(location, 1024), Inline: true}, {Name: postedLabel, Value: posted, Inline: true}}
+	if !notification.CheckedAt.IsZero() {
+		fields = append(fields, &discordgo.MessageEmbedField{Name: "Status", Value: availabilityText(notification), Inline: true})
+		if notification.Availability != finder.JobStatusOpen {
+			color = 0x80848E
+		}
+	}
 	embed := &discordgo.MessageEmbed{
-		Title: truncateRunes(notification.Title, 256), Description: truncateRunes(notification.AIOverview, 4096), Color: 0x0A66C2,
+		Title: truncateRunes(notification.Title, 256), Description: truncateRunes(notification.AIOverview, 4096), Color: color,
 		Author: &discordgo.MessageEmbedAuthor{Name: truncateRunes(notification.CompanyName, 256)},
-		Fields: []*discordgo.MessageEmbedField{{Name: "Location", Value: truncateRunes(location, 1024), Inline: true}, {Name: postedLabel, Value: posted, Inline: true}},
+		Fields: fields,
 	}
 	if validHTTPURL(notification.CompanyLogoURL) {
 		embed.Thumbnail = &discordgo.MessageEmbedThumbnail{URL: notification.CompanyLogoURL}
@@ -337,6 +363,20 @@ func buildJobMessage(notification Notification) *discordgo.MessageSend {
 	return &discordgo.MessageSend{
 		Embeds: []*discordgo.MessageEmbed{embed}, AllowedMentions: &discordgo.MessageAllowedMentions{},
 		Components: jobLinkComponents(notification.JobURL),
+	}
+}
+
+// availabilityText renders relative timestamps, so Discord keeps "checked 3
+// hours ago" current without further edits.
+func availabilityText(notification Notification) string {
+	checked := fmt.Sprintf("<t:%d:R>", notification.CheckedAt.Unix())
+	switch notification.Availability {
+	case finder.JobStatusClosed:
+		return "Closed " + checked
+	case finder.JobStatusRemoved:
+		return "Removed " + checked
+	default:
+		return "Open, checked " + checked
 	}
 }
 

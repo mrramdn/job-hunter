@@ -25,15 +25,15 @@ func Run(ctx context.Context, config Config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	searcher := finder.NewClient(finder.ClientConfig{HTTPClient: &http.Client{}, UserAgent: config.LinkedIn.UserAgent})
-	runner := NewRunner(store, searcher, evaluator, discord, config.Scheduler, config.Discord.AllowedGuildIDs, logger)
+	linkedIn := finder.NewClient(finder.ClientConfig{HTTPClient: &http.Client{}, UserAgent: config.LinkedIn.UserAgent})
+	runner := NewRunner(store, linkedIn, linkedIn, evaluator, discord, config.Scheduler, config.Availability, config.Discord.AllowedGuildIDs, logger)
 	discord.SetRunner(runner)
 	if err := discord.Start(); err != nil {
 		return err
 	}
 	defer discord.Close()
 
-	logger.Info("jobbot started", "scheduler_interval", config.Scheduler.Interval)
+	logger.Info("jobbot started", "scheduler_interval", config.Scheduler.Interval, "availability_check_interval", config.Availability.CheckInterval)
 	schedulerDone := make(chan struct{})
 	go func() {
 		defer close(schedulerDone)

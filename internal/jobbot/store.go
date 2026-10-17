@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akmalfairuz/job-hunter/finder"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 )
@@ -27,8 +28,11 @@ type Repository interface {
 	SaveEvaluation(context.Context, Evaluation) error
 	ClaimNotification(context.Context, Notification) (int64, bool, error)
 	WasPreviouslyNotified(context.Context, string, string, string) (bool, error)
-	CompleteNotification(context.Context, int64) error
+	CompleteNotification(context.Context, int64, string, Notification) error
 	ReleaseNotification(context.Context, int64) error
+	ListAvailabilityChecks(context.Context, time.Duration, time.Duration, int) ([]TrackedNotification, error)
+	SaveAvailabilityCheck(context.Context, int64, finder.JobStatus) error
+	ForgetNotificationMessage(context.Context, int64) error
 	WithSchedulerLock(context.Context, func(context.Context) error) (bool, error)
 }
 
@@ -67,6 +71,15 @@ func (store *Store) checkSchema(ctx context.Context) error {
 		if count != 1 {
 			return fmt.Errorf("required table %q is missing; apply migrations/001_jobbot.sql", table)
 		}
+	}
+	var columns int
+	if err := store.db.GetContext(ctx, &columns, `SELECT COUNT(*) FROM information_schema.columns
+		WHERE table_schema = DATABASE() AND table_name = 'job_notifications'
+		AND column_name IN ('message_id', 'notification_json', 'availability', 'availability_checked_at')`); err != nil {
+		return fmt.Errorf("check schema: %w", err)
+	}
+	if columns != 4 {
+		return errors.New("job_notifications is missing availability columns; apply migrations/002_job_availability.sql")
 	}
 	return nil
 }
@@ -264,8 +277,16 @@ func (store *Store) WasPreviouslyNotified(ctx context.Context, channelID, linked
 	return previouslyNotified, nil
 }
 
-func (store *Store) CompleteNotification(ctx context.Context, id int64) error {
-	_, err := store.db.ExecContext(ctx, `UPDATE job_notifications SET status = 'sent', sent_at = CURRENT_TIMESTAMP WHERE id = ?`, id)
+// CompleteNotification stores the Discord message and its content so the
+// message can be re-rendered when the job's availability changes.
+func (store *Store) CompleteNotification(ctx context.Context, id int64, messageID string, notification Notification) error {
+	content, err := json.Marshal(notification)
+	if err != nil {
+		return fmt.Errorf("encode notification: %w", err)
+	}
+	_, err = store.db.ExecContext(ctx, `UPDATE job_notifications SET status = 'sent', sent_at = CURRENT_TIMESTAMP,
+		message_id = ?, notification_json = ?, availability_checked_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		sql.NullString{String: messageID, Valid: messageID != ""}, string(content), id)
 	if err != nil {
 		return fmt.Errorf("complete notification: %w", err)
 	}
@@ -276,6 +297,52 @@ func (store *Store) ReleaseNotification(ctx context.Context, id int64) error {
 	_, err := store.db.ExecContext(ctx, `DELETE FROM job_notifications WHERE id = ? AND status = 'pending'`, id)
 	if err != nil {
 		return fmt.Errorf("release notification: %w", err)
+	}
+	return nil
+}
+
+// ListAvailabilityChecks returns open jobs sent within maxAge and last checked
+// at least interval ago, least recently checked first.
+func (store *Store) ListAvailabilityChecks(ctx context.Context, interval, maxAge time.Duration, limit int) ([]TrackedNotification, error) {
+	var rows []struct {
+		ID           int64  `db:"id"`
+		MessageID    string `db:"message_id"`
+		Notification []byte `db:"notification_json"`
+	}
+	err := store.db.SelectContext(ctx, &rows, `SELECT id, message_id, notification_json FROM job_notifications
+		WHERE status = 'sent' AND availability = 'open' AND message_id IS NOT NULL AND notification_json IS NOT NULL
+			AND sent_at >= CURRENT_TIMESTAMP - INTERVAL ? SECOND
+			AND (availability_checked_at IS NULL OR availability_checked_at <= CURRENT_TIMESTAMP - INTERVAL ? SECOND)
+		ORDER BY availability_checked_at, id LIMIT ?`, int64(maxAge/time.Second), int64(interval/time.Second), limit)
+	if err != nil {
+		return nil, fmt.Errorf("list availability checks: %w", err)
+	}
+	result := make([]TrackedNotification, 0, len(rows))
+	for _, row := range rows {
+		tracked := TrackedNotification{ID: row.ID, MessageID: row.MessageID}
+		if err := json.Unmarshal(row.Notification, &tracked.Notification); err != nil {
+			return nil, fmt.Errorf("decode notification %d: %w", row.ID, err)
+		}
+		result = append(result, tracked)
+	}
+	return result, nil
+}
+
+func (store *Store) SaveAvailabilityCheck(ctx context.Context, id int64, status finder.JobStatus) error {
+	_, err := store.db.ExecContext(ctx, `UPDATE job_notifications SET availability = ?, availability_checked_at = CURRENT_TIMESTAMP
+		WHERE id = ?`, string(status), id)
+	if err != nil {
+		return fmt.Errorf("save availability check: %w", err)
+	}
+	return nil
+}
+
+// ForgetNotificationMessage stops availability checks for a notification whose
+// Discord message was deleted.
+func (store *Store) ForgetNotificationMessage(ctx context.Context, id int64) error {
+	_, err := store.db.ExecContext(ctx, `UPDATE job_notifications SET message_id = NULL WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("forget notification message: %w", err)
 	}
 	return nil
 }

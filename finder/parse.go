@@ -94,6 +94,24 @@ func parseSearchCard(card *goquery.Selection, baseURL string) (searchCard, bool)
 	return searchCard{job: job}, true
 }
 
+// parseJobStatus looks for LinkedIn's closed-job notice on a job page. The text
+// fallback only searches the top card and figure captions, where LinkedIn
+// shows the notice, because descriptions can contain the phrase.
+func parseJobStatus(reader io.Reader) (JobStatus, error) {
+	document, err := goquery.NewDocumentFromReader(reader)
+	if err != nil {
+		return "", err
+	}
+	if document.Find(".closed-job, .closed-job__flavor--closed").Length() > 0 {
+		return JobStatusClosed, nil
+	}
+	notice := strings.ToLower(cleanText(document.Find(".top-card-layout, figcaption").Text()))
+	if strings.Contains(notice, "no longer accepting applications") {
+		return JobStatusClosed, nil
+	}
+	return JobStatusOpen, nil
+}
+
 func parseJobDetails(reader io.Reader, format DescriptionFormat) (jobDetails, error) {
 	document, err := goquery.NewDocumentFromReader(reader)
 	if err != nil {

@@ -71,6 +71,19 @@ type Notification struct {
 	AIOverview     string
 	DatePosted     *time.Time
 	Reposted       bool
+	// Availability is the LinkedIn status shown on the message as of
+	// CheckedAt. Both are stored in their own columns, and a zero CheckedAt
+	// omits the status from the message.
+	Availability finder.JobStatus `json:"-"`
+	CheckedAt    time.Time        `json:"-"`
+}
+
+// TrackedNotification is a sent notification whose Discord message shows the
+// job's LinkedIn status.
+type TrackedNotification struct {
+	ID           int64
+	MessageID    string
+	Notification Notification
 }
 
 type MatchDecision struct {
